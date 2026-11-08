@@ -21,6 +21,9 @@ struct SdConfig {
     // Host SPI do slot (-1 = SPI2, o classico das placas RGB). Placas cujo
     // display toma o SPI2 (ex.: QSPI do watch) apontam o SPI3 aqui.
     int spiHost = -1;
+    // SD em SDMMC (host nativo, ex.: ES3C28P). sdmmc=true ignora cs/sck/miso/mosi.
+    bool sdmmc = false;
+    int clk = -1, cmd = -1, d0 = -1, d1 = -1, d2 = -1, d3 = -1;  // d1..d3 < 0 = 1-bit
 };
 
 // LED RGB de status (PWM). r < 0 = placa sem LED.

@@ -1,3 +1,4 @@
+#include <driver/sdmmc_host.h>
 #include "FileSystem.h"
 #include "../Utils/StrUtils.h"
 #include "../USBDevice/LogSink.h"
@@ -182,6 +183,49 @@ bool FileSystem::mountSD() {
     const SdConfig& sd = Board::profile().sd;
     spi_host_device_t sdHost = (sd.spiHost >= 0)
         ? (spi_host_device_t)sd.spiHost : (spi_host_device_t)CELEROS_SD_SPI_HOST;
+
+    if (sd.sdmmc) {
+        // SD no host SDMMC nativo (4-bit; cai para 1-bit/400 kHz se falhar)
+        sdmmc_host_t host = SDMMC_HOST_DEFAULT();
+        sdmmc_slot_config_t slot = SDMMC_SLOT_CONFIG_DEFAULT();
+        slot.clk = (gpio_num_t)sd.clk;
+        slot.cmd = (gpio_num_t)sd.cmd;
+        slot.d0 = (gpio_num_t)sd.d0;
+        slot.d1 = (gpio_num_t)sd.d1;
+        slot.d2 = (gpio_num_t)sd.d2;
+        slot.d3 = (gpio_num_t)sd.d3;
+        slot.flags |= SDMMC_SLOT_FLAG_INTERNAL_PULLUP;
+
+        esp_vfs_fat_mount_config_t mountcfg = {};
+        s_sdFormatNext = sdFormatFlagGet();
+        mountcfg.format_if_mount_failed = s_sdFormatNext;
+        mountcfg.max_files = 5;
+        mountcfg.allocation_unit_size = 16 * 1024;
+
+        const int widths[2] = { (sd.d1 >= 0) ? 4 : 1, 1 };
+        const int kHz[2] = { (sd.freqKhz > 0) ? sd.freqKhz : 20000, 400 };
+        esp_err_t err = ESP_FAIL;
+        for (int i = 0; i < 2; i++) {
+            slot.width = widths[i];
+            host.max_freq_khz = kHz[i];
+            err = esp_vfs_fat_sdmmc_mount("/sd", &host, &slot, &mountcfg, &s_sd_card);
+            if (err == ESP_OK) break;
+            ESP_LOGW(FS_TAG, "sdmmc mount falhou (%d-bit, %d kHz): %s",
+                     widths[i], kHz[i], esp_err_to_name(err));
+            s_sd_card = nullptr;
+            vTaskDelay(pdMS_TO_TICKS(20));
+        }
+        if (err != ESP_OK) return false;
+        if (s_sdFormatNext) sdFormatFlagSet(false);
+        ESP_LOGI(FS_TAG, "SD montado em /sd via SDMMC (%s)", s_sd_card->cid.name);
+        s_sdFreeReady = false;
+        s_sdFreeBusy = true;
+        if (xTaskCreate(sdFreeScanTask, "sd_free", 3072, nullptr, 1, nullptr) != pdPASS) {
+            s_sdFreeBusy = false;
+        }
+        mkdir("/sd/apps");  // ignora EEXIST
+        return true;
+    }
 
     // RESET + PULL-UP so no CS ANTES de tocar no bus. O boot log da
     // 4848 (2026-10-18) mostrou "failed to mount card" com o CS (GPIO42)
